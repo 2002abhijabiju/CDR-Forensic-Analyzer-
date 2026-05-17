@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Forensic CDR Analyser | Call Detail Record Intelligence</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="text/javascript" src="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0A0C12; font-family: 'Inter', sans-serif; color: #E8EDF5; }
+    .glass-card { background: rgba(18, 22, 32, 0.85); backdrop-filter: blur(4px); border: 1px solid rgba(245, 158, 11, 0.2); border-radius: 16px; }
+    .cyber-border { border-image: linear-gradient(135deg, #F59E0B, #B45309) 1; border-left: 3px solid #F59E0B; }
+    .data-grid { background: #11141F; border-radius: 14px; border: 1px solid #2A2F3F; overflow-x: auto; }
+    .data-grid th { background: #0D0F17; color: #F59E0B; font-weight: 600; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; padding: 12px 16px; border-bottom: 1px solid #2A2F3F; }
+    .data-grid td { padding: 10px 16px; font-size: 0.8rem; font-family: 'JetBrains Mono', monospace; border-bottom: 1px solid #1E2330; color: #B9C3D4; }
+    .data-grid tr:hover td { background: #1A1F2C; }
+    .btn-primary { background: linear-gradient(95deg, #F59E0B, #D97706); border: none; padding: 8px 20px; border-radius: 40px; font-weight: 600; font-size: 0.8rem; color: #0A0C12; cursor: pointer; transition: 0.2s; }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(245,158,11,0.4); }
+    .btn-secondary { background: transparent; border: 1px solid #3A4055; color: #CBD5E6; padding: 7px 18px; border-radius: 40px; font-weight: 500; transition: 0.2s; cursor: pointer; }
+    .btn-secondary:hover { border-color: #F59E0B; color: #F59E0B; background: rgba(245,158,11,0.05); }
+    .input-field { background: #0D0F17; border: 1px solid #2A2F3F; border-radius: 12px; padding: 10px 14px; color: white; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; width: 100%; outline: none; transition: 0.2s; }
+    .input-field:focus { border-color: #F59E0B; box-shadow: 0 0 0 2px rgba(245,158,11,0.2); }
+    .badge { background: rgba(245,158,11,0.15); color: #F59E0B; border-radius: 40px; padding: 4px 12px; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.02em; }
+    .anomaly-card { border-left: 4px solid #EF4444; background: #1A1F2C; padding: 14px; border-radius: 12px; margin-bottom: 12px; }
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: #11141F; }
+    ::-webkit-scrollbar-thumb { background: #F59E0B; border-radius: 10px; }
+  </style>
+</head>
+<body class="antialiased">
+
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ------ API HELPER ------
+const api = {
+  get: (url) => fetch(url).then(res => { if(!res.ok) throw new Error(res.statusText); return res.json(); }),
+  post: (url, data) => fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data) }).then(res => { if(!res.ok) return res.json().then(e=>{throw new Error(e.detail||'Error')}); return res.json(); }),
+  upload: (url, fd) => fetch(url, { method:'POST', body: fd }).then(res => { if(!res.ok) return res.json().then(e=>{throw new Error(e.detail)}); return res.json(); }),
+  del: (url) => fetch(url, { method:'DELETE' }).then(res => { if(!res.ok) throw new Error(res.statusText); return res.json(); })
+};
+
+// ------ ROUTER ------
+function useRoute() {
+  const [hash, setHash] = useState(window.location.hash || '#/');
+  useEffect(() => {
+    const handler = () => setHash(window.location.hash || '#/');
+    window.addEventListener('hashchange', handler);
+    return () => window.removeEventListener('hashchange', handler);
+  }, []);
+  const navigate = (path) => { window.location.hash = path; };
+  return { hash, navigate };
+}
+
+// ------ TOP NAVBAR ------
+function TopNav({ navigate }) {
+  return (
+    <div className="sticky top-0 z-50 bg-[#0A0C12]/90 backdrop-blur-lg border-b border-[#2A2F3F]">
+      <div className="max-w-7xl mx-auto px-5 flex items-center justify-between h-16">
+        <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate('#/')}>
+          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-lg">
+            <span className="text-black font-bold text-sm">⚡</span>
+          </div>
+          <span className="font-bold text-xl tracking-tight bg-gradient-to-r from-amber-400 to-orange-500 bg-clip-text text-transparent">CDR Forensics</span>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="badge flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> LIVE</div>
+          <span className="text-xs text-gray-400 font-mono">{new Date().toISOString().slice(0,19).replace('T',' ')} UTC</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ------ HOME PAGE (CASES) ------
+function HomePage({ navigate }) {
+  const [cases, setCases] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showNew, setShowNew] = useState(false);
+  const [form, setForm] = useState({ case_number: '', title: '', subscriber_number: '' });
+  const [submitting, setSubmitting] = useState(false);
+
+  const loadCases = useCallback(async () => {
+    try { setCases(await api.get('/api/cases')); } catch(e) { console.error(e); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { loadCases(); }, []);
+
+  const createCase = async () => {
+    if(!form.case_number || !form.title || !form.subscriber_number) return;
+    setSubmitting(true);
+    try {
+      const newCase = await api.post('/api/cases', form);
+      navigate(`#/case/${newCase.id}`);
+    } catch(e) { alert(e.message); }
+    finally { setSubmitting(false); }
+  };
+  const deleteCase = async (id, e) => {
+    e.stopPropagation();
+    if (confirm('Delete this case permanently? All CDR records will be lost.')) {
+      try {
+        await api.del(`/api/cases/${id}`);
+        loadCases();
+      } catch(err) {
+        alert('Failed to delete: ' + err.message);
+      }
+    }
+  };
+  return (
+    <div className="max-w-6xl mx-auto px-5 py-10">
+      <div className="flex justify-between items-center mb-8">
+        <div><h1 className="text-3xl font-bold tracking-tight">Investigation Dashboard</h1><p className="text-gray-400 text-sm mt-1">Behavioral CDR analysis & anomaly detection</p></div>
+        <button className="btn-primary" onClick={() => setShowNew(!showNew)}>{showNew ? '✕ Cancel' : '+ New Case'}</button>
+      </div>
+      {showNew && (
+        <div className="glass-card p-6 mb-8 rounded-2xl">
+          <h2 className="text-amber-400 text-sm font-bold uppercase tracking-wider mb-4">Open Forensic Case</h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
+            <input className="input-field" placeholder="Case number (e.g., FIR-2026-001)" value={form.case_number} onChange={e=>setForm({...form, case_number: e.target.value})} />
+            <input className="input-field" placeholder="Case title" value={form.title} onChange={e=>setForm({...form, title: e.target.value})} />
+            <input className="input-field" placeholder="Subscriber number (analyzed phone)" value={form.subscriber_number} onChange={e=>setForm({...form, subscriber_number: e.target.value})} />
+          </div>
+          <button className="btn-primary" disabled={submitting} onClick={createCase}>{submitting ? 'Creating...' : 'Create Case'}</button>
+        </div>
+      )}
+      {loading ? <div className="flex justify-center py-20"><div className="w-10 h-10 border-2 border-amber-500 border-t-transparent rounded-full animate-spin"/></div> :
+        cases.length === 0 ? <div className="text-center py-28 text-gray-500">No cases. Start new investigation.</div> :
+        <div className="grid gap-4">
+          {cases.map(c => (
+            <div key={c.id} onClick={() => navigate(`#/case/${c.id}`)} className="glass-card cyber-border p-5 cursor-pointer hover:bg-[#141824] transition-all">
+              <div className="flex flex-wrap justify-between items-center">
+                <div><div className="text-amber-400 font-mono font-bold text-sm">{c.case_number}</div><div className="text-white font-semibold text-lg">{c.title}</div></div>
+                <div className="flex gap-4 items-center">
+                  <button onClick={(e) => deleteCase(c.id, e)} className="text-red-400 hover:text-red-600 text-xl transition" title="Delete case">🗑️</button>
+                  <span className="badge">{c.status}</span>
+                  <span className="text-xs text-gray-400">{c.created_at?.slice(0,10)}</span>
+                  <span className="text-amber-400 text-xl">→</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      }
+    </div>
+  );
+}
+
+// ------ UPLOAD PANEL (CSV) ------
+function UploadPanel({ caseId, onUploadDone }) {
+  const [file, setFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [message, setMessage] = useState(null);
+
+  const handleUpload = async () => {
+    if(!file) return;
+    setUploading(true); setMessage(null);
+    const fd = new FormData(); fd.append('file', file);
+    try {
+      const res = await api.upload(`/api/cases/${caseId}/upload`, fd);
+      setMessage({ type: 'success', text: `✅ ${res.inserted} records ingested.` });
+      if(onUploadDone) onUploadDone();
+    } catch(e) { setMessage({ type: 'error', text: `❌ ${e.message}` }); }
+    finally { setUploading(false); }
+  };
+
+  return (
+    <div className="glass-card p-4 rounded-xl mb-6 flex flex-wrap gap-3 items-end">
+      <div className="flex-1 min-w-[200px]">
+        <label className="text-xs text-gray-400 uppercase tracking-wider">CDR CSV (columns: date, time, number, duration_sec, category)</label>
+        <input type="file" accept=".csv" onChange={e=>setFile(e.target.files[0])} className="hidden" id="cdrFile"/>
+        <label htmlFor="cdrFile" className="input-field cursor-pointer block mt-1">{file ? file.name : 'Choose CSV file'}</label>
+      </div>
+      <button className="btn-primary" onClick={handleUpload} disabled={!file || uploading}>{uploading ? 'Processing...' : 'Upload & Analyze'}</button>
+      {message && <div className={`text-sm ${message.type === 'success' ? 'text-green-400' : 'text-red-400'}`}>{message.text}</div>}
+    </div>
+  );
+}
+
+// ------ RECORDS TABLE ------
+function RecordsTab({ caseId }) {
+  const [data, setData] = useState(null); const [page, setPage] = useState(1); const [loading, setLoading] = useState(false);
+  const load = useCallback(async (p) => {
+    setLoading(true);
+    try { setData(await api.get(`/api/cases/${caseId}/records?page=${p}&page_size=40`)); } catch(e) {}
+    finally { setLoading(false); }
+  }, [caseId]);
+  useEffect(() => { load(page); }, [page, load]);
+  if(loading && !data) return <div className="flex justify-center py-12"><div className="animate-spin w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full"/></div>;
+  if(!data || data.records?.length===0) return <div className="text-center py-16 text-gray-400">No records. Upload CDR first.</div>;
+  return (<div><div className="flex justify-between mb-3 text-sm"><span className="text-gray-400">Total {data.total} calls · Page {data.page}/{data.pages}</span><div className="flex gap-2"><button className="btn-secondary text-xs" disabled={page<=1} onClick={()=>setPage(p=>p-1)}>‹ Prev</button><button className="btn-secondary text-xs" disabled={page>=data.pages} onClick={()=>setPage(p=>p+1)}>Next ›</button></div></div><div className="data-grid"><table className="w-full"><thead><tr><th>Called Number</th><th>Date/Time</th><th>Duration (s)</th><th>Type</th></tr></thead><tbody>{data.records.map(r=><tr key={r.id}><td className="text-amber-300 font-mono text-sm">{r.called_number}</td><td className="text-gray-300 text-xs">{r.call_datetime?.replace('T',' ').slice(0,19)}</td><td>{r.duration_seconds}</td><td><span className="badge">{r.call_type}</span></td></tr>)}</tbody></table></div></div>);
+}
+
+// ------ FREQUENCY ------
+function FrequencyTab({ caseId }) {
+  const [data, setData] = useState(null); const [loading, setLoading] = useState(true);
+  useEffect(() => { api.get(`/api/cases/${caseId}/analysis/frequency`).then(setData).catch(()=>{}).finally(()=>setLoading(false)); }, [caseId]);
+  if(loading) return <div className="flex justify-center py-12"><div className="animate-spin w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full"/></div>;
+  if(!data?.length) return <div className="text-center py-16 text-gray-400">No call data</div>;
+  return (<div className="data-grid"><table className="w-full"><thead><tr><th>#</th><th>Contact Number</th><th>Call Count</th></tr></thead><tbody>{data.map((d,i)=><tr key={i}><td className="text-gray-400">{i+1}</td><td className="text-amber-300 font-mono">{d.called_number}</td><td><div className="flex items-center gap-2"><div className="h-2 bg-amber-500/40 rounded-full" style={{width:`${Math.min(100, d.call_count / data[0].call_count * 100)}%`, maxWidth:'120px'}}/><span className="font-bold text-amber-400">{d.call_count}</span></div></td></tr>)}</tbody></table></div>);
+}
+
+// ------ HOURLY PATTERN ------
+function HourlyTab({ caseId }) {
+  const [data, setData] = useState(null); const chartRef = useRef(null); const instRef = useRef(null);
+  useEffect(() => { api.get(`/api/cases/${caseId}/analysis/hourly`).then(setData); }, [caseId]);
+  useEffect(() => {
+    if(!data || !chartRef.current) return;
+    if(instRef.current) instRef.current.destroy();
+    instRef.current = new Chart(chartRef.current, { type: 'bar', data: { labels: data.map(d=>`${d.hour}:00`), datasets: [{ label: 'Call Volume', data: data.map(d=>d.count), backgroundColor: '#F59E0B66', borderColor: '#F59E0B', borderWidth: 1 }] }, options: { responsive: true, maintainAspectRatio: false, scales: { y: { grid: { color: '#2A2F3F' }, ticks: { color: '#94A3B8' } }, x: { ticks: { color: '#94A3B8' } } }, plugins: { legend: { labels: { color: '#CBD5E6' } } } } });
+    return () => { if(instRef.current) instRef.current.destroy(); };
+  }, [data]);
+  if(!data) return <div className="flex justify-center py-12"><div className="animate-spin w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full"/></div>;
+  const total = data.reduce((a,b)=>a+b.count,0); const peak = [...data].sort((a,b)=>b.count-a.count)[0];
+  return (<div><div className="grid grid-cols-3 gap-4 mb-6"><div className="glass-card p-4 text-center"><div className="text-gray-400 text-xs">Total Calls</div><div className="text-2xl font-bold text-white">{total}</div></div><div className="glass-card p-4 text-center"><div className="text-gray-400 text-xs">Peak Hour</div><div className="text-2xl font-bold text-amber-400">{peak.hour}:00</div></div><div className="glass-card p-4 text-center"><div className="text-gray-400 text-xs">Peak Volume</div><div className="text-2xl font-bold text-white">{peak.count}</div></div></div><div className="h-64"><canvas ref={chartRef}/></div></div>);
+}
+
+// ------ RELATIONSHIP NETWORK ------
+function RelationshipTab({ caseId }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [view, setView] = useState('table');
+  const containerRef = useRef(null);
+  const networkRef = useRef(null);
+
+  useEffect(() => {
+    api.get(`/api/cases/${caseId}/relationship-mapping`)
+      .then(setData)
+      .catch(err => console.error(err))
+      .finally(() => setLoading(false));
+  }, [caseId]);
+
+  useEffect(() => {
+    if (!data || view !== 'graph' || !containerRef.current) return;
+    if (networkRef.current) {
+      networkRef.current.destroy();
+      networkRef.current = null;
+    }
+    const nodes = data.entities.map(e => ({
+      id: e.id,
+      label: e.label,
+      title: `${e.type}\n${Object.entries(e.properties).map(([k,v]) => `${k}: ${v}`).join('\n')}`,
+      color: e.type === 'Subscriber' ? '#F59E0B' : '#3B82F6',
+      shape: e.type === 'Subscriber' ? 'star' : 'dot',
+      size: e.type === 'Subscriber' ? 30 : 20 + Math.min(20, (e.properties.voice_calls || 0) / 10)
+    }));
+    const getEdgeSymbol = (type) => {
+      if (type === 'SMS') return '✉️';
+      if (type === 'MIXED') return '🔄';
+      return '📞';
+    };
+    const edges = data.relationships.map(r => ({
+      from: r.source,
+      to: r.target,
+      label: getEdgeSymbol(r.type),
+      title: `${r.type} (${r.weight} interactions)`,
+      width: Math.min(5, r.weight / 10),
+      color: { color: '#F59E0B' }
+    }));
+    const options = {
+      nodes: { font: { color: '#E2E8F0', size: 12 }, borderWidth: 1 },
+      edges: { arrows: { to: { enabled: true, scaleFactor: 0.5 } }, font: { color: '#94A3B8', size: 10 } },
+      physics: { stabilization: true, solver: 'forceAtlas2Based' },
+      interaction: { hover: true, tooltipDelay: 300 }
+    };
+    const container = containerRef.current;
+    networkRef.current = new vis.Network(container, { nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) }, options);
+    return () => { if (networkRef.current) networkRef.current.destroy(); };
+  }, [data, view]);
+
+  if (loading) return <div className="flex justify-center py-12"><div className="spinner"/></div>;
+  if (!data || data.entities.length === 0) return <div className="text-center py-16 text-gray-400">No relationship data. Upload CDR first.</div>;
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-4">
+        <div className="flex gap-2">
+          <button className={`btn-secondary text-xs ${view === 'table' ? 'bg-amber-500/20 border-amber-500' : ''}`} onClick={() => setView('table')}>📋 Table View</button>
+          <button className={`btn-secondary text-xs ${view === 'graph' ? 'bg-amber-500/20 border-amber-500' : ''}`} onClick={() => setView('graph')}>🕸️ Graph View (Maltego)</button>
+        </div>
+        <span className="text-muted text-xs">{data.entities.length - 1} contacts</span>
+      </div>
+
+      {view === 'table' ? (
+        <div className="data-grid">
+          <table className="w-full">
+            <thead><tr><th>Contact Number</th><th>Voice Calls</th><th>SMS</th><th>Total Duration (s)</th><th>First Call</th><th>Last Call</th><th>Link Type</th></tr></thead>
+            <tbody>
+              {data.relationships.map((rel, idx) => (
+                <tr key={idx}>
+                  <td className="font-mono text-amber-300">{rel.target}</td>
+                  <td>{rel.properties.voice_calls}</td>
+                  <td>{rel.properties.sms}</td>
+                  <td>{rel.properties.total_duration}</td>
+                  <td className="text-xs">{rel.properties.first_seen?.slice(0,19).replace('T',' ')}</td>
+                  <td className="text-xs">{rel.properties.last_seen?.slice(0,19).replace('T',' ')}</td>
+                  <td><span className="badge">{rel.type}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="bg-[#0D0F17] rounded-xl border border-[#2A2F3F]" style={{ height: '550px' }} ref={containerRef}></div>
+      )}
+    </div>
+  );
+}
+
+// ------ BEHAVIORAL ANOMALIES ------
+function BehaviorTab({ caseId }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const spikeChartRef = useRef(null);
+  const spikeChartInstance = useRef(null);
+
+  useEffect(() => {
+    api.get(`/api/cases/${caseId}/analysis/behavior`)
+      .then(setData)
+      .catch(err => console.error(err))
+      .finally(() => setLoading(false));
+  }, [caseId]);
+
+  useEffect(() => {
+    if (!data || !data.spike_data || !spikeChartRef.current) return;
+    if (spikeChartInstance.current) spikeChartInstance.current.destroy();
+
+    const ctx = spikeChartRef.current.getContext('2d');
+    spikeChartInstance.current = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: data.spike_data.map(d => d.date.slice(5)),
+        datasets: [
+          {
+            label: 'Daily calls',
+            data: data.spike_data.map(d => d.count),
+            borderColor: data.spike_data.map(d => d.is_spike ? '#EF4444' : '#F59E0B'),
+            backgroundColor: 'transparent',
+            borderWidth: 2,
+            pointBackgroundColor: data.spike_data.map(d => d.is_spike ? '#EF4444' : '#F59E0B'),
+            pointRadius: 4,
+            tension: 0.2,
+            fill: false
+          },
+          {
+            label: 'Baseline (7d avg)',
+            data: data.spike_data.map(d => d.baseline),
+            borderColor: '#64748B',
+            borderWidth: 1.5,
+            borderDash: [5, 5],
+            pointRadius: 0,
+            fill: false
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.raw}` } },
+          legend: { labels: { color: '#CBD5E6' } }
+        },
+        scales: {
+          y: { grid: { color: '#2A2F3F' }, ticks: { color: '#94A3B8' } },
+          x: { ticks: { color: '#94A3B8', maxRotation: 45 } }
+        }
+      }
+    });
+    return () => { if (spikeChartInstance.current) spikeChartInstance.current.destroy(); };
+  }, [data]);
+
+  if (loading) return <div className="flex justify-center py-12"><div className="spinner"/></div>;
+  if (!data || data.summary.total_anomalies === 0 && data.top_suspicious.length === 0)
+    return <div className="text-center py-16 text-gray-400">✅ No anomalies detected. Call pattern is consistent.</div>;
+
+  const riskBadge = (risk) => {
+    if (risk === 'HIGH') return <span className="bg-red-500/20 text-red-400 px-2 py-0.5 rounded-full text-xs">🔴 HIGH</span>;
+    if (risk === 'MEDIUM') return <span className="bg-orange-500/20 text-orange-400 px-2 py-0.5 rounded-full text-xs">🟡 MEDIUM</span>;
+    return <span className="bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full text-xs">🟢 LOW</span>;
+  };
+
+  return (
+    <div className="space-y-8">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="glass-card p-4 text-center"><div className="text-gray-400 text-xs uppercase tracking-wider">Total Anomalies</div><div className="text-2xl font-bold text-red-400">{data.summary.total_anomalies}</div></div>
+        <div className="glass-card p-4 text-center"><div className="text-gray-400 text-xs uppercase tracking-wider">🌙 Night Activity</div><div className="text-2xl font-bold text-orange-400">{data.summary.night_activity_count}</div></div>
+        <div className="glass-card p-4 text-center"><div className="text-gray-400 text-xs uppercase tracking-wider">📈 Spike Events</div><div className="text-2xl font-bold text-red-400">{data.summary.spike_events}</div></div>
+        <div className="glass-card p-4 text-center"><div className="text-gray-400 text-xs uppercase tracking-wider">👤 New Contacts</div><div className="text-2xl font-bold text-blue-400">{data.summary.new_contacts}</div></div>
+      </div>
+
+      <div>
+        <h3 className="text-amber-400 font-bold text-sm uppercase tracking-wider mb-3">🔴 Top Suspicious Numbers (Priority View)</h3>
+        <div className="data-grid overflow-x-auto">
+          <table className="w-full">
+            <thead><tr><th>Number</th><th>Score</th><th>Risk</th><th>Key Flags</th></tr></thead>
+            <tbody>
+              {data.top_suspicious.map(s => (
+                <tr key={s.number}>
+                  <td className="font-mono text-amber-300">{s.number}</td>
+                  <td className="font-mono">{s.score}</td>
+                  <td>{riskBadge(s.risk)}</td>
+                  <td className="text-xs text-gray-300">{s.flags.join(', ') || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <h3 className="text-amber-400 font-bold text-sm uppercase tracking-wider mb-3">📈 Spike Detection (Daily Call Volume)</h3>
+        <div className="glass-card p-4 rounded-xl" style={{ height: '280px' }}>
+          <canvas ref={spikeChartRef}></canvas>
+        </div>
+        <p className="text-xs text-gray-500 mt-2">🔴 Red points = spikes (>2× baseline). Dashed line = 7‑day rolling baseline.</p>
+      </div>
+
+      {data.night_heatmap.length > 0 && (
+        <div>
+          <h3 className="text-amber-400 font-bold text-sm uppercase tracking-wider mb-3">🌙 Night Activity Heatmap (22:00 – 05:00)</h3>
+          <div className="data-grid overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr><th>Date</th><th>Hour</th><th>Calls</th></tr></thead>
+              <tbody>
+                {data.night_heatmap.slice(0, 20).map((h, idx) => (
+                  <tr key={idx}><td>{h.day}</td><td>{h.hour}:00</td><td>{h.count}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <div>
+        <h3 className="text-amber-400 font-bold text-sm uppercase tracking-wider mb-3">📋 Anomaly Events (Detailed Log)</h3>
+        <div className="data-grid overflow-x-auto">
+          <table className="w-full">
+            <thead><tr><th>Timestamp</th><th>Number</th><th>Type</th><th>Description</th></tr></thead>
+            <tbody>
+              {data.event_log.map((e, i) => (
+                <tr key={i}>
+                  <td className="whitespace-nowrap font-mono text-xs">{e.timestamp.replace('T', ' ').slice(0,19)}</td>
+                  <td className="font-mono">{e.number === '—' ? '—' : e.number}</td>
+                  <td><span className="badge">{e.type.replace('_', ' ')}</span></td>
+                  <td className="text-sm text-gray-300">{e.description}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// -------- ADVANCED GEOLOCATION TAB (Tower Upload & Estimation) ----------
+function AdvancedGeolocationTab() {
+  const [towers, setTowers] = useState([]);
+  const [file, setFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [estimating, setEstimating] = useState(false);
+  const [locationResult, setLocationResult] = useState(null);
+  const [tokens, setTokens] = useState({ unwired_token: "", opencellid_token: "" });
+  const [tokenMessage, setTokenMessage] = useState("");
+  const mapRef = useRef(null);
+  const mapInstance = useRef(null);
+
+  useEffect(() => {
+    api.get("/api/load_token").then(res => {
+      setTokens({
+        unwired_token: res.unwired_token || "",
+        opencellid_token: res.opencellid_token || ""
+      });
+    }).catch(err => console.error(err));
+  }, []);
+
+  const saveTokens = async () => {
+    try {
+      await api.post("/api/save_token", {
+        unwired_token: tokens.unwired_token,
+        opencellid_token: tokens.opencellid_token
+      });
+      setTokenMessage("✅ Tokens saved successfully");
+      setTimeout(() => setTokenMessage(""), 3000);
+    } catch (err) {
+      setTokenMessage("❌ Failed to save tokens");
+    }
+  };
+
+  const handleFileUpload = async () => {
+    if (!file) return;
+    setUploading(true);
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const res = await api.upload("/api/upload_towers", formData);
+      setTowers(res.towers);
+    } catch (err) {
+      alert("Upload failed: " + err.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const estimateLocation = async () => {
+    if (!towers.length) return;
+    setEstimating(true);
+    try {
+      const res = await api.post("/api/estimate_location", {
+        towers: towers,
+        unwired_token: tokens.unwired_token,
+        opencellid_token: tokens.opencellid_token
+      });
+      setLocationResult(res);
+      if (mapRef.current && res.lat && res.lon) {
+        if (mapInstance.current) mapInstance.current.remove();
+        const map = L.map(mapRef.current).setView([res.lat, res.lon], 14);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© OpenStreetMap'
+        }).addTo(map);
+        L.marker([res.lat, res.lon]).addTo(map)
+          .bindPopup(`<b>Estimated Location</b><br>Accuracy: ${Math.round(res.accuracy)} m`)
+          .openPopup();
+        mapInstance.current = map;
+      }
+    } catch (err) {
+      alert("Estimation failed: " + err.message);
+    } finally {
+      setEstimating(false);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (mapInstance.current) mapInstance.current.remove();
+    };
+  }, []);
+
+  return (
+    <div className="space-y-6">
+      <div className="glass-card p-5 rounded-xl">
+        <h3 className="text-amber-400 font-bold text-sm uppercase tracking-wider mb-3">🔑 API Tokens (Unwired Labs / OpenCellID)</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Unwired Labs Token</label>
+            <input type="password" className="input-field" placeholder="Enter your Unwired token" value={tokens.unwired_token} onChange={(e) => setTokens({...tokens, unwired_token: e.target.value})} />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">OpenCellID Token</label>
+            <input type="password" className="input-field" placeholder="Enter your OpenCellID token" value={tokens.opencellid_token} onChange={(e) => setTokens({...tokens, opencellid_token: e.target.value})} />
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <button className="btn-secondary text-sm" onClick={saveTokens}>Save Tokens</button>
+          {tokenMessage && <span className="text-green-400 text-xs">{tokenMessage}</span>}
+        </div>
+        <p className="text-xs text-gray-500 mt-3">⚠️ Tokens are stored locally on the server. Leave empty to use free fallbacks (BeaconDB, IP).</p>
+      </div>
+
+      <div className="glass-card p-5 rounded-xl">
+        <h3 className="text-amber-400 font-bold text-sm uppercase tracking-wider mb-3">📡 Upload Tower Scan (CSV / Excel)</h3>
+        <div className="flex flex-wrap gap-3 items-end">
+          <div className="flex-1 min-w-[200px]">
+            <label className="text-xs text-gray-400">File with columns: MCC, MNC, LAC, CellID, (Signal_dBm optional)</label>
+            <input type="file" accept=".csv,.xlsx,.xls" onChange={(e) => setFile(e.target.files[0])} className="input-field block mt-1" />
+          </div>
+          <button className="btn-primary" onClick={handleFileUpload} disabled={!file || uploading}>
+            {uploading ? "Uploading..." : "Upload & Parse"}
+          </button>
+        </div>
+        {towers.length > 0 && (
+          <div className="mt-4">
+            <div className="flex justify-between items-center mb-2">
+              <span className="text-sm font-mono text-amber-400">{towers.length} towers loaded</span>
+              <button className="btn-primary text-sm" onClick={estimateLocation} disabled={estimating}>
+                {estimating ? "Estimating..." : "🎯 Estimate Location"}
+              </button>
+            </div>
+            <div className="data-grid max-h-48 overflow-auto">
+              <table className="w-full text-xs">
+                <thead><tr><th>MCC</th><th>MNC</th><th>LAC</th><th>Cell ID</th><th>Signal (dBm)</th></tr></thead>
+                <tbody>
+                  {towers.slice(0, 10).map((t, i) => (
+                    <tr key={i}>
+                      <td>{t.mcc}</td><td>{t.mnc}</td><td>{t.lac}</td><td>{t.cellid}</td>
+                      <td>{t.signal_dbm || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {locationResult && (
+        <div className="glass-card p-5 rounded-xl">
+          <h3 className="text-amber-400 font-bold text-sm uppercase tracking-wider mb-3">📍 Estimated Position</h3>
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <div><span className="text-gray-400 text-xs">Latitude</span><div className="font-mono text-white">{locationResult.lat.toFixed(6)}</div></div>
+            <div><span className="text-gray-400 text-xs">Longitude</span><div className="font-mono text-white">{locationResult.lon.toFixed(6)}</div></div>
+            <div><span className="text-gray-400 text-xs">Accuracy (radius)</span><div className="font-mono text-white">{Math.round(locationResult.accuracy)} m</div></div>
+            <div><span className="text-gray-400 text-xs">Towers used</span><div className="font-mono text-white">{locationResult.towers_used?.length}</div></div>
+          </div>
+          <div ref={mapRef} style={{ height: "320px", borderRadius: "12px" }}></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ------ CASE VIEW ------
+function CaseView({ caseId, navigate }) {
+  const [caseInfo, setCaseInfo] = useState(null);
+  const [refresh, setRefresh] = useState(0);
+  const [tab, setTab] = useState(0);
+  const tabs = ['📞 Records', '📊 Top Contacts', '⏱️ Hourly Pattern', '🔗 Relationship Map', '🧠 Behavioral Anomalies', '📍 Advanced Geolocation'];
+
+  useEffect(() => { api.get(`/api/cases/${caseId}`).then(setCaseInfo); }, [caseId, refresh]);
+
+  return (
+    <div className="max-w-7xl mx-auto px-5 py-6">
+      <div className="flex items-center gap-3 mb-5 flex-wrap">
+        <button className="btn-secondary text-sm" onClick={() => navigate('#/')}>← All Cases</button>
+        {caseInfo && <><span className="text-amber-400 font-mono font-bold">{caseInfo.case_number}</span><span className="text-white text-xl">{caseInfo.title}</span><span className="badge ml-2">Subscriber: {caseInfo.subscriber_number}</span></>}
+      </div>
+      <UploadPanel caseId={caseId} onUploadDone={() => setRefresh(r=>r+1)} />
+      <div className="flex flex-wrap gap-1 border-b border-[#2A2F3F] mb-6 overflow-x-auto">
+        {tabs.map((t,i)=> <button key={i} onClick={()=>setTab(i)} className={`px-5 py-2.5 text-sm font-semibold transition-all ${tab===i ? 'border-b-2 border-amber-500 text-amber-400' : 'text-gray-400 hover:text-white'}`}>{t}</button>)}
+      </div>
+      <div key={refresh}>
+        {tab===0 && <RecordsTab caseId={caseId}/>}
+        {tab===1 && <FrequencyTab caseId={caseId}/>}
+        {tab===2 && <HourlyTab caseId={caseId}/>}
+        {tab===3 && <RelationshipTab caseId={caseId} key={refresh}/>}
+        {tab===4 && <BehaviorTab caseId={caseId}/>}
+        {tab===5 && <AdvancedGeolocationTab />}
+      </div>
+    </div>
+  );
+}
+
+// ------ MAIN APP ------
+function App() {
+  const { hash, navigate } = useRoute();
+  const match = hash.match(/^#\/case\/(\d+)/);
+  return (<div className="min-h-screen"><TopNav navigate={navigate}/><main>{match ? <CaseView caseId={parseInt(match[1])} navigate={navigate}/> : <HomePage navigate={navigate}/>}</main></div>);
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
